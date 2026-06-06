@@ -1,0 +1,46 @@
+# Fly app config for the multi-project WhatsApp bot.
+# Set `app` to your own Fly app name before deploying.
+app = "wa-multiproject-bot"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  AUTH_DIR = "/data/auth-state"
+  DB_PATH = "/data/wp.db"
+  PORT = "8080"
+  LOG_LEVEL = "info"
+
+# Persistent volume for Baileys auth state. Must exist before first deploy:
+#   fly volumes create wa_data --region iad --size 1
+[[mounts]]
+  source = "wa_data"
+  destination = "/data"
+  # Daily volume snapshots are off — Baileys auth state can be re-paired
+  # in ~2 minutes, and snapshots beyond the 10 GB/mo free quota cost
+  # $0.08/GB/mo (≈ $1.60/mo for a 1 GB volume × 30 days of retention).
+  scheduled_snapshots = false
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  # Keep the bot always running — it maintains a persistent WebSocket to
+  # WhatsApp and cannot tolerate auto-stop. "off" is a string, not a bool.
+  auto_stop_machines = "off"
+  auto_start_machines = true
+
+  # Fly's edge proxy defaults to a 60 s idle timeout. POST /v1/post can
+  # legitimately take longer than that when transcoding video. The
+  # handler enforces its own 270 s wall budget; we set the proxy idle
+  # timeout to 300 s so the request body actually has room to finish
+  # before the proxy disconnects.
+  [http_service.http_options]
+    idle_timeout = 300
+
+[[vm]]
+  size = "shared-cpu-1x"
+  # 256mb was OOM-killed on video uploads (Baileys buffers the full file
+  # in RAM before pushing to WhatsApp). 512mb absorbs typical phone-shot
+  # video; bump to 1gb if you ever post 4K / large clips.
+  memory = "512mb"

@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>wa-multiproject-bot — admin</title>
+    <link rel="stylesheet" href="/admin/assets/admin.css" />
+  </head>
+  <body>
+    <header>
+      <h1>wa-multiproject-bot</h1>
+      <div class="status" id="status">disconnected</div>
+    </header>
+
+    <main>
+      <section id="login-view" class="card">
+        <h2>Sign in</h2>
+        <p class="muted">Paste your admin token (the <code>ADMIN_TOKEN</code> Fly secret).</p>
+        <form id="login-form">
+          <input
+            type="password"
+            id="login-token"
+            placeholder="admin token"
+            autocomplete="off"
+            required
+          />
+          <button type="submit">Unlock</button>
+        </form>
+        <p class="error" id="login-error" hidden></p>
+      </section>
+
+      <section id="app-view" hidden>
+        <nav class="tabs">
+          <button class="tab active" data-tab="projects">Projects</button>
+          <button class="tab" data-tab="allowlist">Allowlist</button>
+          <button class="tab" data-tab="messages">Messages</button>
+          <button class="tab" data-tab="read">Read</button>
+          <button id="logout" class="link">Sign out</button>
+        </nav>
+
+        <div id="tab-projects" class="tab-panel active">
+          <div class="row">
+            <h2>Projects</h2>
+            <button id="new-project">+ New project</button>
+          </div>
+          <div id="projects-list" class="list"></div>
+        </div>
+
+        <div id="tab-allowlist" class="tab-panel">
+          <div class="row">
+            <h2>Group allowlist</h2>
+            <button id="save-allowlist">Save</button>
+          </div>
+          <p class="muted">
+            Only groups the paired phone is in. Tick the groups that should be selectable for
+            projects.
+          </p>
+          <div id="allowlist-list" class="list"></div>
+        </div>
+
+        <div id="tab-messages" class="tab-panel">
+          <div class="row">
+            <h2>Message log</h2>
+            <button id="refresh-messages">Refresh</button>
+          </div>
+          <div id="messages-list" class="list"></div>
+        </div>
+
+        <div id="tab-read" class="tab-panel">
+          <div class="row">
+            <h2>Inbound capture</h2>
+            <button id="save-readable">Save capture list</button>
+          </div>
+          <p class="muted">
+            Privacy default is empty — nothing is captured until you tick a group or add a
+            person below. Captured messages are stored locally (max 10,000 rows).
+          </p>
+
+          <fieldset>
+            <legend>Groups</legend>
+            <div id="readable-groups" class="checklist"></div>
+          </fieldset>
+
+          <fieldset>
+            <legend>People (DMs)</legend>
+            <div id="readable-people" class="list"></div>
+            <div class="row row-add">
+              <button type="button" id="add-person" class="ghost">+ Add person</button>
+            </div>
+          </fieldset>
+
+          <div class="row row-section">
+            <h2>Inbound messages</h2>
+            <div class="item-actions">
+              <select id="inbound-filter-chat"></select>
+              <label class="muted inline-check">
+                <input type="checkbox" id="inbound-filter-fromme" checked />
+                show mine
+              </label>
+              <button id="refresh-inbound" class="ghost">Refresh</button>
+            </div>
+          </div>
+          <div id="inbound-list" class="list"></div>
+        </div>
+      </section>
+    </main>
+
+    <div id="modal" class="modal" hidden>
+      <div class="modal-card">
+        <h3 id="modal-title">Project created</h3>
+        <p id="modal-body" class="muted"></p>
+        <pre id="modal-token" class="token"></pre>
+        <p class="warning">
+          Copy this token now. It will not be shown again — if you lose it, rotate the
+          project's token to generate a new one.
+        </p>
+        <div class="row">
+          <button id="modal-copy">Copy</button>
+          <button id="modal-close">Done</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="project-modal" class="modal" hidden>
+      <div class="modal-card">
+        <h3 id="project-modal-title">New project</h3>
+        <form id="project-form">
+          <label>
+            Name
+            <input type="text" id="project-name" required pattern="[A-Za-z0-9_-]+" />
+          </label>
+          <fieldset>
+            <legend>Allowed groups</legend>
+            <div id="project-groups" class="checklist"></div>
+          </fieldset>
+          <div class="row">
+            <button type="button" id="project-cancel">Cancel</button>
+            <button type="submit" id="project-save">Save</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <script src="/admin/assets/admin.js"></script>
+  </body>
+</html>

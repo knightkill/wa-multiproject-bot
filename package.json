@@ -1,0 +1,27 @@
+{
+  "name": "wa-multiproject-bot",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "description": "Multi-project Baileys WhatsApp bot: one paired phone relays each project's posts to its own WhatsApp groups via an HTTP API.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/knightkill/wa-multiproject-bot.git"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "start": "node --experimental-sqlite index.js"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.7",
+    "@hono/zod-openapi": "^1.4.0",
+    "@whiskeysockets/baileys": "7.0.0-rc13",
+    "hono": "^4.6.14",
+    "pino": "^9.5.0",
+    "qrcode": "^1.5.4",
+    "zod": "^4.4.3"
+  }
+}

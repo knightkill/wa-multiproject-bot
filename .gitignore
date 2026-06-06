@@ -1,0 +1,18 @@
+node_modules
+auth-state
+.fly
+
+# Local SQLite (admin UI state) — lives on the Fly volume in prod.
+wp.db
+wp.db-wal
+wp.db-shm
+
+# Local dev token scratchpad
+.local-test-tokens
+.env
+.env.local
+
+# Local tooling / OS cruft
+.claude/
+.DS_Store
+**/.DS_Store

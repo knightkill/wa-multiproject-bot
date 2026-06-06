@@ -1,0 +1,17 @@
+node_modules
+auth-state
+.fly
+.git
+.gitignore
+README.md
+*.md
+
+# Never ship local secrets or state into the build context
+.env
+.env.local
+.local-test-tokens
+wp.db
+wp.db-wal
+wp.db-shm
+.claude
+.DS_Store
