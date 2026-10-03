@@ -204,6 +204,30 @@ function createAccount({ name, authDir, dbPath, prefix }) {
     return new Response(png, { headers: { 'Content-Type': 'image/png' } });
   });
 
+  // Alternative to the QR: WhatsApp → Linked devices → Link a device → "Link
+  // with phone number instead", then type this 8-character code. It outlives
+  // a QR's ~20 s, which a QR relayed through chat often can't beat.
+  app.post(`${prefix}/pairing-code`, rateLimit({ windowMs: 60_000, max: 5 }), async (c) => {
+    if (!bearerMatches(c.req.header('Authorization'), ADMIN_TOKEN)) {
+      return c.json({ error: 'unauthorized' }, 401);
+    }
+    if (paired) return c.json({ error: 'already paired' }, 404);
+    if (!sock || !currentQR) return c.json({ error: 'not ready — try again in a few seconds' }, 503);
+    const body = await c.req.json().catch(() => ({}));
+    const phone = String(body.phone ?? '').replace(/\D/g, '');
+    if (!/^[1-9]\d{7,14}$/.test(phone)) {
+      return c.json({ error: 'phone must be digits with country code, e.g. 919876543210' }, 400);
+    }
+    try {
+      const code = await sock.requestPairingCode(phone);
+      log.info({ phone }, 'pairing code issued');
+      return c.json({ ok: true, code });
+    } catch (err) {
+      log.error({ err }, 'pairing code request failed');
+      return c.json({ error: 'pairing code request failed', detail: String(err?.message ?? err) }, 502);
+    }
+  });
+
   const adminApp = createAdminApp({
     db,
     getSock: () => sock,
