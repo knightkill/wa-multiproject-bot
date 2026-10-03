@@ -473,6 +473,9 @@ function makeQueries(db) {
     },
 
     isReadableChat(jid) {
+      // READ_ALL_CHATS=true captures every chat except Status updates;
+      // otherwise only chats opted in via set_readable_chats.
+      if (process.env.READ_ALL_CHATS === 'true') return jid !== 'status@broadcast';
       return stmt.getReadableChat.get(jid) != null;
     },
 

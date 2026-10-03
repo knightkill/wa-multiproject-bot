@@ -55,7 +55,11 @@ async function start() {
     auth: state,
     logger,
     printQRInTerminal: false,
-    syncFullHistory: false,
+    syncFullHistory: true,
+    // Baileys' own default excludes the FULL sync type from processing —
+    // without this override, syncFullHistory:true requests the payload
+    // but the library silently drops it before messaging-history.set fires.
+    shouldSyncHistoryMessage: () => true,
     markOnlineOnConnect: false,
   });
 
@@ -101,6 +105,29 @@ async function start() {
         logger.warn({ err, id: message?.key?.id }, 'inbound capture failed');
       }
     }
+  });
+
+  // WhatsApp pushes prior chat history only around a fresh pairing
+  // (first connection with new creds), streamed as one or more
+  // messaging-history.set chunks. Same readable-chats gate and
+  // normalizer as live capture; INSERT OR IGNORE on (wa_id, chat_jid)
+  // makes this safe to overlap with messages.upsert and across chunks.
+  sock.ev.on('messaging-history.set', ({ messages, syncType, isLatest, progress }) => {
+    logger.info({ syncType, isLatest, progress, count: messages?.length ?? 0 }, 'history sync chunk received');
+    if (!messages?.length) return;
+    let stored = 0;
+    for (const message of messages) {
+      try {
+        const chatJid = message?.key?.remoteJid;
+        if (!chatJid || !db.isReadableChat(chatJid)) continue;
+        const row = normalizeInbound(message);
+        if (!row) continue;
+        if (db.insertInboundMessage(row)) stored++;
+      } catch (err) {
+        logger.warn({ err, id: message?.key?.id }, 'history capture failed');
+      }
+    }
+    logger.info({ stored }, 'history sync chunk processed');
   });
 }
 
