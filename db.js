@@ -99,7 +99,7 @@ export function openDb(path) {
 }
 
 const MESSAGE_LOG_CAP = 5000;
-const INBOUND_CAP = 10_000;
+const INBOUND_CAP = Number(process.env.INBOUND_CAP ?? 10_000);
 
 function hashToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex');

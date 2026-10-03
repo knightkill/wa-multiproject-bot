@@ -62,7 +62,7 @@ export function createAdminApp({ db, getSock, isPaired, groupsCache, adminToken,
     '/assets/*',
     serveStatic({
       root: './public',
-      rewriteRequestPath: (p) => p.replace(/^\/admin\/assets/, '/assets'),
+      rewriteRequestPath: (p) => p.replace(/^.*\/admin\/assets/, '/assets'),
     })
   );
 
