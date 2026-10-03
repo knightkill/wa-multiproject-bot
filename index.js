@@ -115,6 +115,13 @@ function createAccount({ name, authDir, dbPath, prefix }) {
         log.warn({ statusCode, loggedOut }, 'connection closed');
         if (!loggedOut) {
           setTimeout(() => start().catch((e) => log.error(e, 'reconnect failed')), 2000);
+        } else if (!state.creds.registered) {
+          // A pairing attempt that never completed (an unused pairing code
+          // leaves creds.me set, so the next connect tries to log in and is
+          // refused). Nothing to lose: wipe and go back to waiting for a link.
+          log.warn('unfinished pairing rejected — resetting auth state for a fresh QR');
+          fs.rmSync(authDir, { recursive: true, force: true });
+          setTimeout(() => start().catch((e) => log.error(e, 'restart failed')), 2000);
         } else {
           log.fatal(`logged out — clear ${authDir} and re-pair via ${prefix}/qr`);
         }
