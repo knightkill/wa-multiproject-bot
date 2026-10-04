@@ -386,7 +386,7 @@ export function createAdminApp({ db, getSock, isPaired, groupsCache, adminToken,
       summary: 'Recent inbound messages from readable chats',
       description:
         'Returns inbound messages captured from chats in /api/readable-chats. ' +
-        'Order: newest first. For polling, pass ?since=<nextCursor> from the previous response to get only newer messages.',
+        'Order: newest first by send time. For polling, pass ?since=<nextCursor> from the previous response to get only newer messages.',
       security: [{ bearerAuth: [] }],
       request: { query: InboundQuery },
       responses: {
@@ -401,7 +401,9 @@ export function createAdminApp({ db, getSock, isPaired, groupsCache, adminToken,
         fromMe: fromMe == null ? null : fromMe === 'true',
         limit: limit ? Number(limit) : 100,
       });
-      const nextCursor = rows.length > 0 ? rows[0].id : null;
+      // Rows are in send-time order (history sync inserts out of order), so the
+      // polling cursor is the highest id in the batch, not the first row's.
+      const nextCursor = rows.length > 0 ? Math.max(...rows.map((r) => r.id)) : null;
       return c.json({ messages: rows, nextCursor });
     }
   );

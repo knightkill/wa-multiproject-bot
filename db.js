@@ -95,6 +95,14 @@ export function openDb(path) {
     db.exec('ALTER TABLE message_log ADD COLUMN media_count INTEGER NOT NULL DEFAULT 0');
   }
 
+  // Idempotent column adds for media download (2026-10-04).
+  const inboundCols = db.prepare('PRAGMA table_info(inbound_messages)').all();
+  for (const [name, type] of [['media_mime', 'TEXT'], ['media_raw', 'TEXT'], ['media_path', 'TEXT']]) {
+    if (!inboundCols.some((c) => c.name === name)) {
+      db.exec(`ALTER TABLE inbound_messages ADD COLUMN ${name} ${type}`);
+    }
+  }
+
   return makeQueries(db);
 }
 
@@ -227,21 +235,26 @@ function makeQueries(db) {
 
     insertInbound: db.prepare(
       `INSERT OR IGNORE INTO inbound_messages
-       (wa_id, chat_jid, sender_jid, from_me, timestamp, text, media_type, quoted_wa_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+       (wa_id, chat_jid, sender_jid, from_me, timestamp, text, media_type, quoted_wa_id, media_mime, media_raw)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ),
+    getInboundMedia: db.prepare(
+      'SELECT id, media_type, media_mime, media_raw, media_path FROM inbound_messages WHERE id = ?'
+    ),
+    setInboundMediaPath: db.prepare('UPDATE inbound_messages SET media_path = ? WHERE id = ?'),
     pruneInbound: db.prepare(
       `DELETE FROM inbound_messages WHERE id <= (
          SELECT id FROM inbound_messages ORDER BY id DESC LIMIT 1 OFFSET ?
        )`
     ),
     listInbound: db.prepare(
-      `SELECT id, wa_id, chat_jid, sender_jid, from_me, timestamp, text, media_type, quoted_wa_id
+      `SELECT id, wa_id, chat_jid, sender_jid, from_me, timestamp, text, media_type, quoted_wa_id,
+              media_mime, (media_path IS NOT NULL) AS media_saved
        FROM inbound_messages
        WHERE (? IS NULL OR chat_jid = ?)
          AND (? IS NULL OR id > ?)
          AND (? IS NULL OR from_me = ?)
-       ORDER BY id DESC
+       ORDER BY timestamp DESC, id DESC
        LIMIT ?`
     ),
   };
@@ -492,10 +505,29 @@ function makeQueries(db) {
         msg.timestamp,
         msg.text ?? null,
         msg.mediaType ?? null,
-        msg.quotedWaId ?? null
+        msg.quotedWaId ?? null,
+        msg.mime ?? null,
+        msg.raw ?? null
       );
-      if (info.changes > 0) stmt.pruneInbound.run(INBOUND_CAP);
-      return info.changes > 0;
+      if (info.changes === 0) return null;
+      stmt.pruneInbound.run(INBOUND_CAP);
+      return Number(info.lastInsertRowid);
+    },
+
+    getInboundMedia(id) {
+      const row = stmt.getInboundMedia.get(id);
+      if (!row || !row.media_type) return null;
+      return {
+        id: row.id,
+        mediaType: row.media_type,
+        mime: row.media_mime,
+        raw: row.media_raw,
+        path: row.media_path,
+      };
+    },
+
+    setInboundMediaPath(id, filePath) {
+      stmt.setInboundMediaPath.run(filePath, id);
     },
 
     listInboundMessages({ jid, since, fromMe, limit }) {

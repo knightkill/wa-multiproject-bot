@@ -1,3 +1,5 @@
+import { BufferJSON } from '@whiskeysockets/baileys';
+
 const MEDIA_BRANCHES = [
   ['imageMessage', 'image'],
   ['videoMessage', 'video'],
@@ -23,6 +25,7 @@ export function normalizeInbound(waMsg) {
   let text = null;
   let mediaType = null;
   let quotedWaId = null;
+  let mime = null;
 
   if (message.conversation) {
     text = message.conversation;
@@ -34,6 +37,7 @@ export function normalizeInbound(waMsg) {
   for (const [branch, type] of MEDIA_BRANCHES) {
     if (message[branch]) {
       mediaType = type;
+      mime = message[branch].mimetype ?? null;
       if (!text && message[branch].caption) text = message[branch].caption;
       quotedWaId = quotedWaId ?? message[branch].contextInfo?.stanzaId ?? null;
       break;
@@ -59,5 +63,8 @@ export function normalizeInbound(waMsg) {
     text,
     mediaType,
     quotedWaId,
+    mime,
+    // Everything needed to download the media later (keys, CDN path).
+    raw: mediaType ? JSON.stringify(waMsg, BufferJSON.replacer) : null,
   };
 }

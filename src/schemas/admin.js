@@ -171,6 +171,8 @@ export const InboundMessage = z
     text: z.string().nullable(),
     media_type: z.string().nullable(),
     quoted_wa_id: z.string().nullable(),
+    media_mime: z.string().nullable(),
+    media_saved: z.number().int(),
   })
   .openapi('InboundMessage');
 
