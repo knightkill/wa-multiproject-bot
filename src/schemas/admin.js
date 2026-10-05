@@ -171,6 +171,8 @@ export const InboundMessage = z
     text: z.string().nullable(),
     media_type: z.string().nullable(),
     quoted_wa_id: z.string().nullable(),
+    media_mime: z.string().nullable(),
+    media_saved: z.number().int(),
   })
   .openapi('InboundMessage');
 
@@ -183,3 +185,16 @@ export const InboundResponse = z
     }),
   })
   .openapi('InboundList');
+
+// Reader tier: same filters as InboundQuery plus a stateless time window.
+export const ReaderInboundQuery = InboundQuery.extend({
+  sinceTs: z
+    .string()
+    .regex(/^\d+$/)
+    .optional()
+    .openapi({
+      param: { name: 'sinceTs', in: 'query' },
+      example: '1759622400000',
+      description: 'Only messages sent at or after this epoch-ms time.',
+    }),
+});

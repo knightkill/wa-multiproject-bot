@@ -95,11 +95,19 @@ export function openDb(path) {
     db.exec('ALTER TABLE message_log ADD COLUMN media_count INTEGER NOT NULL DEFAULT 0');
   }
 
+  // Idempotent column adds for media download (2026-10-04).
+  const inboundCols = db.prepare('PRAGMA table_info(inbound_messages)').all();
+  for (const [name, type] of [['media_mime', 'TEXT'], ['media_raw', 'TEXT'], ['media_path', 'TEXT']]) {
+    if (!inboundCols.some((c) => c.name === name)) {
+      db.exec(`ALTER TABLE inbound_messages ADD COLUMN ${name} ${type}`);
+    }
+  }
+
   return makeQueries(db);
 }
 
 const MESSAGE_LOG_CAP = 5000;
-const INBOUND_CAP = 10_000;
+const INBOUND_CAP = Number(process.env.INBOUND_CAP ?? 10_000);
 
 function hashToken(token) {
   return crypto.createHash('sha256').update(token).digest('hex');
@@ -227,21 +235,28 @@ function makeQueries(db) {
 
     insertInbound: db.prepare(
       `INSERT OR IGNORE INTO inbound_messages
-       (wa_id, chat_jid, sender_jid, from_me, timestamp, text, media_type, quoted_wa_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+       (wa_id, chat_jid, sender_jid, from_me, timestamp, text, media_type, quoted_wa_id, media_mime, media_raw)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ),
+    getInboundMedia: db.prepare(
+      'SELECT id, chat_jid, media_type, media_mime, media_raw, media_path FROM inbound_messages WHERE id = ?'
+    ),
+    setInboundMediaPath: db.prepare('UPDATE inbound_messages SET media_path = ? WHERE id = ?'),
     pruneInbound: db.prepare(
       `DELETE FROM inbound_messages WHERE id <= (
          SELECT id FROM inbound_messages ORDER BY id DESC LIMIT 1 OFFSET ?
        )`
     ),
     listInbound: db.prepare(
-      `SELECT id, wa_id, chat_jid, sender_jid, from_me, timestamp, text, media_type, quoted_wa_id
+      `SELECT id, wa_id, chat_jid, sender_jid, from_me, timestamp, text, media_type, quoted_wa_id,
+              media_mime, (media_path IS NOT NULL) AS media_saved
        FROM inbound_messages
        WHERE (? IS NULL OR chat_jid = ?)
+         AND (? IS NULL OR chat_jid IN (SELECT value FROM json_each(?)))
          AND (? IS NULL OR id > ?)
+         AND (? IS NULL OR timestamp >= ?)
          AND (? IS NULL OR from_me = ?)
-       ORDER BY id DESC
+       ORDER BY timestamp DESC, id DESC
        LIMIT ?`
     ),
   };
@@ -473,6 +488,9 @@ function makeQueries(db) {
     },
 
     isReadableChat(jid) {
+      // READ_ALL_CHATS=true captures every chat except Status updates;
+      // otherwise only chats opted in via set_readable_chats.
+      if (process.env.READ_ALL_CHATS === 'true') return jid !== 'status@broadcast';
       return stmt.getReadableChat.get(jid) != null;
     },
 
@@ -489,21 +507,50 @@ function makeQueries(db) {
         msg.timestamp,
         msg.text ?? null,
         msg.mediaType ?? null,
-        msg.quotedWaId ?? null
+        msg.quotedWaId ?? null,
+        msg.mime ?? null,
+        msg.raw ?? null
       );
-      if (info.changes > 0) stmt.pruneInbound.run(INBOUND_CAP);
-      return info.changes > 0;
+      if (info.changes === 0) return null;
+      stmt.pruneInbound.run(INBOUND_CAP);
+      return Number(info.lastInsertRowid);
     },
 
-    listInboundMessages({ jid, since, fromMe, limit }) {
+    getInboundMedia(id) {
+      const row = stmt.getInboundMedia.get(id);
+      if (!row || !row.media_type) return null;
+      return {
+        id: row.id,
+        chatJid: row.chat_jid,
+        mediaType: row.media_type,
+        mime: row.media_mime,
+        raw: row.media_raw,
+        path: row.media_path,
+      };
+    },
+
+    setInboundMediaPath(id, filePath) {
+      stmt.setInboundMediaPath.run(filePath, id);
+    },
+
+    // `chats`, when given, is a hard allowlist applied in SQL (so LIMIT counts
+    // only allowed rows); an empty array matches nothing. `sinceTs` is epoch ms
+    // on the message's send time.
+    listInboundMessages({ jid, since, fromMe, limit, chats, sinceTs }) {
       const lim = Math.max(1, Math.min(500, limit ?? 100));
       const sinceVal = since == null ? null : Number(since);
+      const sinceTsVal = sinceTs == null ? null : Number(sinceTs);
       const fromMeVal = fromMe == null ? null : (fromMe ? 1 : 0);
+      const chatsVal = chats == null ? null : JSON.stringify(chats.map(String));
       return stmt.listInbound.all(
         jid ?? null,
         jid ?? null,
+        chatsVal,
+        chatsVal,
         sinceVal,
         sinceVal,
+        sinceTsVal,
+        sinceTsVal,
         fromMeVal,
         fromMeVal,
         lim

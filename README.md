@@ -211,6 +211,33 @@ Read them back with `GET /admin/api/inbound` (both endpoints require `ADMIN_TOKE
 > the participants' awareness. To stop capturing, remove the chat from the readable
 > list; to purge, delete the rows from `inbound_messages`.
 
+### Read-only reader token
+
+A third credential tier lets an automated reader (e.g. a cloud agent) poll
+inbound messages from a fixed set of chats without holding `ADMIN_TOKEN`.
+
+| Env var        | Meaning |
+|----------------|---------|
+| `READER_TOKEN` | Bearer token for `/read/*` only. Feature is **off** (every `/read/*` request gets 401) if unset, shorter than 32 chars, or equal to `ADMIN_TOKEN`. Generate with `openssl rand -hex 32`; set as a secret. |
+| `READER_CHATS` | Comma-separated chat JIDs the reader may see. Server-side allowlist; empty ⇒ the reader sees nothing. The same list applies to every account (`/read/*` and `/a/<name>/read/*`); a JID only matches in the account whose database captured it. |
+
+- `GET /read/inbound` — same query params and response as `GET /admin/api/inbound`
+  (`jid`, `since`, `fromMe`, `limit` → `{ messages, nextCursor }`), restricted in SQL
+  to `READER_CHATS`, plus `sinceTs` (epoch ms, `timestamp >= sinceTs`) for stateless
+  time-window polling. A `jid` outside the allowlist returns an empty list, not an error.
+- `GET /read/inbound/:id/media` — the message's media file; 404 unless the message's
+  chat is in `READER_CHATS`.
+
+Both are rate-limited to 60/min per client IP and take the token from the
+`Authorization: Bearer` header only. The reader token is rejected on every other
+route, and `ADMIN_TOKEN` is rejected on `/read/*`, so the two tiers stay separately
+auditable.
+
+```sh
+curl -H "Authorization: Bearer $READER_TOKEN" \
+  "https://your-app-name.fly.dev/read/inbound?sinceTs=$(( ($(date +%s) - 3600) * 1000 ))"
+```
+
 ## Routes
 
 | Method | Path                              | Auth          | Purpose                                                |
@@ -227,6 +254,8 @@ Read them back with `GET /admin/api/inbound` (both endpoints require `ADMIN_TOKE
 | GET    | `/admin`                          | none (UI)     | Admin web app (login inside)                           |
 | `*`    | `/admin/api/*`                    | `ADMIN_TOKEN` | Admin data API (projects, allowlist, DM allowlist, messages, groups, readable-chats, inbound) |
 | GET    | `/admin/openapi.json`             | `ADMIN_TOKEN` | Admin API OpenAPI 3.1 spec (no public Redoc)           |
+| GET    | `/read/inbound`                   | `READER_TOKEN`| Inbound messages from `READER_CHATS` only — see [Read-only reader token](#read-only-reader-token) |
+| GET    | `/read/inbound/:id/media`         | `READER_TOKEN`| Media for a message in `READER_CHATS`; 404 otherwise   |
 
 ### Status codes for POST /v1/post
 
