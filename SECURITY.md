@@ -17,6 +17,14 @@ This service holds credentials worth protecting:
 - **`ADMIN_TOKEN`** guards the entire admin API and the `/qr` pairing page —
   project/token/allowlist management and the ability to re-pair the bot. Use a
   high-entropy value (`openssl rand -hex 32`) and store it as a secret.
+- **`READER_TOKEN`** (optional) can only `GET /read/inbound` and
+  `GET /read/inbound/:id/media`, and only for chats listed in `READER_CHATS`.
+  A leak exposes the captured messages and media of those chats — nothing else:
+  it cannot send, change groups or allowlists, rotate tokens, or pair. It is
+  refused if shorter than 32 chars or equal to `ADMIN_TOKEN`, and `ADMIN_TOKEN`
+  is not accepted on `/read/*`. Fetching media the bot did not save on arrival
+  makes the bot ask WhatsApp to re-upload it, so a reader can cause that one
+  outbound protocol request. Revoke by unsetting or rotating the secret.
 - **Project tokens** are bearer credentials scoped to one project's allowed
   groups. They are stored only as SHA-256 hashes; rotate them from the admin UI
   if one leaks.

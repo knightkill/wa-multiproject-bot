@@ -239,7 +239,7 @@ function makeQueries(db) {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ),
     getInboundMedia: db.prepare(
-      'SELECT id, media_type, media_mime, media_raw, media_path FROM inbound_messages WHERE id = ?'
+      'SELECT id, chat_jid, media_type, media_mime, media_raw, media_path FROM inbound_messages WHERE id = ?'
     ),
     setInboundMediaPath: db.prepare('UPDATE inbound_messages SET media_path = ? WHERE id = ?'),
     pruneInbound: db.prepare(
@@ -252,7 +252,9 @@ function makeQueries(db) {
               media_mime, (media_path IS NOT NULL) AS media_saved
        FROM inbound_messages
        WHERE (? IS NULL OR chat_jid = ?)
+         AND (? IS NULL OR chat_jid IN (SELECT value FROM json_each(?)))
          AND (? IS NULL OR id > ?)
+         AND (? IS NULL OR timestamp >= ?)
          AND (? IS NULL OR from_me = ?)
        ORDER BY timestamp DESC, id DESC
        LIMIT ?`
@@ -519,6 +521,7 @@ function makeQueries(db) {
       if (!row || !row.media_type) return null;
       return {
         id: row.id,
+        chatJid: row.chat_jid,
         mediaType: row.media_type,
         mime: row.media_mime,
         raw: row.media_raw,
@@ -530,15 +533,24 @@ function makeQueries(db) {
       stmt.setInboundMediaPath.run(filePath, id);
     },
 
-    listInboundMessages({ jid, since, fromMe, limit }) {
+    // `chats`, when given, is a hard allowlist applied in SQL (so LIMIT counts
+    // only allowed rows); an empty array matches nothing. `sinceTs` is epoch ms
+    // on the message's send time.
+    listInboundMessages({ jid, since, fromMe, limit, chats, sinceTs }) {
       const lim = Math.max(1, Math.min(500, limit ?? 100));
       const sinceVal = since == null ? null : Number(since);
+      const sinceTsVal = sinceTs == null ? null : Number(sinceTs);
       const fromMeVal = fromMe == null ? null : (fromMe ? 1 : 0);
+      const chatsVal = chats == null ? null : JSON.stringify(chats.map(String));
       return stmt.listInbound.all(
         jid ?? null,
         jid ?? null,
+        chatsVal,
+        chatsVal,
         sinceVal,
         sinceVal,
+        sinceTsVal,
+        sinceTsVal,
         fromMeVal,
         fromMeVal,
         lim
