@@ -244,6 +244,15 @@ function createAccount({ name, authDir, dbPath, prefix }) {
     if (!sock) throw new Error('not connected');
     await sock.authState.keys.set({ 'app-state-sync-version': { critical_unblock_low: null } });
     await sock.resyncAppState(['critical_unblock_low'], true);
+    // resyncAppState is a buffered function: its contacts.upsert events are
+    // flushed after it resolves, so wait for the counts to settle (≤10 s).
+    let last = JSON.stringify(db.contactCounts());
+    for (let i = 0; i < 20; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const now = JSON.stringify(db.contactCounts());
+      if (now === last && i > 0) break;
+      last = now;
+    }
     log.info({ counts: db.contactCounts() }, 'contacts resync finished');
   }
 
