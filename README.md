@@ -238,6 +238,43 @@ curl -H "Authorization: Bearer $READER_TOKEN" \
   "https://your-app-name.fly.dev/read/inbound?sinceTs=$(( ($(date +%s) - 3600) * 1000 ))"
 ```
 
+## Contact names
+
+The bot keeps a name for each person it knows, from three sources stored side
+by side and picked at read time, most trusted first:
+
+1. **WhatsApp address book.** The paired phone syncs saved contact names to
+   linked devices; the bot records them as they arrive. For a session paired
+   before this feature, backfill once with `POST /admin/api/contacts/resync`
+   (re-reads the address-book snapshot; no re-pairing).
+2. **Google Contacts**, pushed in by the Apps Script in
+   [`apps-script/contacts-push/`](apps-script/contacts-push/) as an hourly full
+   snapshot to `PUT /contacts/google`.
+3. **pushName** — the name the person set on their own WhatsApp profile.
+
+LIDs resolve to phone numbers through mappings WhatsApp sends (app-state,
+history sync, message keys). Names are admin-only: `GET /admin/api/contacts?q=`
+searches them, and `GET /admin/api/inbound` adds `sender_name` / `chat_name`.
+They never feed the DM allowlist. See
+[ADR 0007](docs/adr/0007-contact-names.md).
+
+| Env var               | Meaning |
+|-----------------------|---------|
+| `CONTACTS_PUSH_TOKEN` | Bearer token for `PUT /contacts/google` only (per account: `/a/<name>/contacts/google`). Push is **off** (401) if unset, shorter than 32 chars, or equal to `ADMIN_TOKEN`/`READER_TOKEN`. Generate with `openssl rand -hex 32`; set as a secret. |
+
+### Google Apps Script setup (once per Google account)
+
+1. <https://script.google.com> → New project, signed in as the account whose
+   contacts you want. Paste `Code.gs`; in Project Settings tick "Show
+   appsscript.json" and paste `appsscript.json` (it enables the People API
+   advanced service). Or push both with [`clasp`](https://github.com/google/clasp).
+2. Project Settings → Script properties: `BOT_URL` (e.g.
+   `https://your-app-name.fly.dev`, or `…/a/<account>`) and
+   `CONTACTS_PUSH_TOKEN`.
+3. Run `pushContacts` once and approve the consent screen (contacts read-only,
+   external requests, triggers). The log shows the bot's reply.
+4. Run `installTrigger` once to schedule `pushContacts` hourly.
+
 ## Routes
 
 | Method | Path                              | Auth          | Purpose                                                |
@@ -252,10 +289,11 @@ curl -H "Authorization: Bearer $READER_TOKEN" \
 | `*`    | `/v1/communities/*`               | project token | Community management — see [Community management](#community-management) |
 | `*`    | `/v1/dm*`                         | project token | Throttled 1:1 DMs — see [Direct messages](#direct-messages-throttled) |
 | GET    | `/admin`                          | none (UI)     | Admin web app (login inside)                           |
-| `*`    | `/admin/api/*`                    | `ADMIN_TOKEN` | Admin data API (projects, allowlist, DM allowlist, messages, groups, readable-chats, inbound) |
+| `*`    | `/admin/api/*`                    | `ADMIN_TOKEN` | Admin data API (projects, allowlist, DM allowlist, messages, groups, readable-chats, inbound, contacts) |
 | GET    | `/admin/openapi.json`             | `ADMIN_TOKEN` | Admin API OpenAPI 3.1 spec (no public Redoc)           |
 | GET    | `/read/inbound`                   | `READER_TOKEN`| Inbound messages from `READER_CHATS` only — see [Read-only reader token](#read-only-reader-token) |
 | GET    | `/read/inbound/:id/media`         | `READER_TOKEN`| Media for a message in `READER_CHATS`; 404 otherwise   |
+| PUT    | `/contacts/google`                | `CONTACTS_PUSH_TOKEN` | Google Contacts snapshot — see [Contact names](#contact-names) |
 
 ### Status codes for POST /v1/post
 
