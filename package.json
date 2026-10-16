@@ -21,6 +21,7 @@
     "@hono/zod-openapi": "^1.4.0",
     "@whiskeysockets/baileys": "7.0.0-rc13",
     "hono": "^4.6.14",
+    "libphonenumber-js": "1.13.14",
     "pino": "^9.5.0",
     "qrcode": "^1.5.4",
     "zod": "^4.4.3"

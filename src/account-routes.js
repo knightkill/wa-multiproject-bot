@@ -5,6 +5,7 @@ import { serveInboundMedia, parseMediaId } from './media.js';
 import { createAdminApp } from '../routes/admin.js';
 import { createReaderApp } from '../routes/reader.js';
 import { createProjectApp } from '../routes/project.js';
+import { createContactsPushApp } from '../routes/contacts-push.js';
 
 // Every HTTP route for one account, under `prefix` ('' for the original).
 // Returns the project app, which the caller mounts last because it owns
@@ -21,6 +22,8 @@ export function registerAccountRoutes(app, {
   dmSender,
   dmAllowlistEnabled,
   saveMedia,
+  resyncContacts,
+  contactsPushToken = null,
   log,
 }) {
   // The pairing QR grants whoever scans it control of the bot's WhatsApp
@@ -82,9 +85,15 @@ export function registerAccountRoutes(app, {
     groupsCache,
     dmSender,
     adminToken,
+    resyncContacts,
     logger: log,
   });
   app.route(`${prefix}/admin`, adminApp);
+
+  // Google Contacts snapshot pushed by an Apps Script (CONTACTS_PUSH_TOKEN).
+  // Always mounted so that, when disabled, it answers 401 rather than falling
+  // through to a project app's catch-all.
+  app.route(`${prefix}/contacts`, createContactsPushApp({ db, pushToken: contactsPushToken, logger: log }));
 
   // Read-only, chat-scoped tier (READER_TOKEN / READER_CHATS). Always mounted
   // so that, when disabled, /read/* answers 401 instead of falling through to

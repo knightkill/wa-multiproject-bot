@@ -1,5 +1,6 @@
 import { DatabaseSync } from 'node:sqlite';
 import crypto from 'node:crypto';
+import { displayName } from './src/contacts.js';
 
 export function openDb(path) {
   const db = new DatabaseSync(path);
@@ -87,6 +88,24 @@ export function openDb(path) {
     );
     CREATE INDEX IF NOT EXISTS inbound_messages_chat_idx
       ON inbound_messages(chat_jid, id DESC);
+
+    -- One row per person, keyed by phone-number JID when known (else LID).
+    -- Each name source owns one column so no source overwrites another.
+    CREATE TABLE IF NOT EXISTS contacts (
+      jid TEXT PRIMARY KEY,
+      wa_name TEXT,
+      push_name TEXT,
+      google_name TEXT,
+      google_aliases TEXT,
+      updated_at INTEGER NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS lid_map (
+      lid TEXT PRIMARY KEY,
+      pn TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS lid_map_pn_idx ON lid_map(pn);
   `);
 
   // Idempotent column add for installs that predate media_count.
@@ -259,6 +278,65 @@ function makeQueries(db) {
        ORDER BY timestamp DESC, id DESC
        LIMIT ?`
     ),
+
+    upsertWaContact: db.prepare(
+      `INSERT INTO contacts (jid, wa_name, push_name, updated_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(jid) DO UPDATE SET
+         wa_name = COALESCE(excluded.wa_name, wa_name),
+         push_name = COALESCE(excluded.push_name, push_name),
+         updated_at = excluded.updated_at`
+    ),
+    upsertGoogleContact: db.prepare(
+      `INSERT INTO contacts (jid, google_name, google_aliases, updated_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(jid) DO UPDATE SET
+         google_name = excluded.google_name,
+         google_aliases = excluded.google_aliases,
+         updated_at = excluded.updated_at`
+    ),
+    clearGoogleNames: db.prepare(
+      'UPDATE contacts SET google_name = NULL, google_aliases = NULL WHERE google_name IS NOT NULL'
+    ),
+    pruneNamelessContacts: db.prepare(
+      'DELETE FROM contacts WHERE wa_name IS NULL AND push_name IS NULL AND google_name IS NULL'
+    ),
+    getContact: db.prepare(
+      'SELECT jid, wa_name, push_name, google_name, google_aliases FROM contacts WHERE jid = ?'
+    ),
+    deleteContact: db.prepare('DELETE FROM contacts WHERE jid = ?'),
+    // Fold a LID-keyed row into its phone-number row; the phone row's own
+    // values win where both have one.
+    mergeContactInto: db.prepare(
+      `INSERT INTO contacts (jid, wa_name, push_name, google_name, google_aliases, updated_at)
+       SELECT ?, wa_name, push_name, google_name, google_aliases, ? FROM contacts WHERE jid = ?
+       ON CONFLICT(jid) DO UPDATE SET
+         wa_name = COALESCE(wa_name, excluded.wa_name),
+         push_name = COALESCE(push_name, excluded.push_name),
+         google_name = COALESCE(google_name, excluded.google_name),
+         google_aliases = COALESCE(google_aliases, excluded.google_aliases),
+         updated_at = excluded.updated_at`
+    ),
+    upsertLid: db.prepare(
+      'INSERT OR REPLACE INTO lid_map (lid, pn, updated_at) VALUES (?, ?, ?)'
+    ),
+    pnForLid: db.prepare('SELECT pn FROM lid_map WHERE lid = ?'),
+    lidsForPn: db.prepare('SELECT lid FROM lid_map WHERE pn = ?'),
+    searchContacts: db.prepare(
+      `SELECT jid, wa_name, push_name, google_name, google_aliases FROM contacts
+       WHERE ? IS NULL
+          OR wa_name LIKE ? ESCAPE '\\' OR push_name LIKE ? ESCAPE '\\'
+          OR google_name LIKE ? ESCAPE '\\' OR google_aliases LIKE ? ESCAPE '\\'
+          OR jid LIKE ? ESCAPE '\\'
+       ORDER BY COALESCE(wa_name, google_name, push_name) COLLATE NOCASE
+       LIMIT ?`
+    ),
+    contactCounts: db.prepare(
+      `SELECT COUNT(*) AS total,
+              COUNT(wa_name) AS whatsapp,
+              COUNT(google_name) AS google,
+              COUNT(push_name) AS pushname,
+              (SELECT COUNT(*) FROM lid_map) AS lids
+       FROM contacts`
+    ),
   };
 
   function tx(fn) {
@@ -292,6 +370,27 @@ function makeQueries(db) {
       stmt.clearDmAllowed.run();
       for (const jid of jids) stmt.insertDmAllowed.run(jid, null, now);
     });
+  }
+
+  function canonicalJid(jid) {
+    if (typeof jid === 'string' && jid.endsWith('@lid')) {
+      return stmt.pnForLid.get(jid)?.pn ?? jid;
+    }
+    return jid;
+  }
+
+  function contactView(row) {
+    const shown = displayName(row);
+    return {
+      jid: row.jid,
+      lids: row.jid.endsWith('@lid') ? [] : stmt.lidsForPn.all(row.jid).map((r) => r.lid),
+      name: shown?.name ?? null,
+      source: shown?.source ?? null,
+      whatsappName: row.wa_name,
+      googleName: row.google_name,
+      googleAliases: row.google_aliases ? JSON.parse(row.google_aliases) : [],
+      pushName: row.push_name,
+    };
   }
 
   function replaceReadableChats(chats, now) {
@@ -555,6 +654,60 @@ function makeQueries(db) {
         fromMeVal,
         lim
       );
+    },
+
+    upsertWaContact(jid, { waName, pushName }) {
+      stmt.upsertWaContact.run(canonicalJid(jid), waName ?? null, pushName ?? null, Date.now());
+    },
+
+    setLidMapping(lid, pn) {
+      const known = stmt.pnForLid.get(lid)?.pn;
+      if (known === pn) return;
+      tx(() => {
+        const now = Date.now();
+        stmt.upsertLid.run(lid, pn, now);
+        if (stmt.getContact.get(lid)) {
+          stmt.mergeContactInto.run(pn, now, lid);
+          stmt.deleteContact.run(lid);
+        }
+      });
+    },
+
+    // Full snapshot from Google: replaces every google_* value, so contacts
+    // deleted in Google lose their Google name here too.
+    replaceGoogleContacts(contacts) {
+      const now = Date.now();
+      tx(() => {
+        stmt.clearGoogleNames.run();
+        for (const [jid, { name, aliases }] of contacts) {
+          stmt.upsertGoogleContact.run(jid, name, aliases.length ? JSON.stringify(aliases) : null, now);
+        }
+        stmt.pruneNamelessContacts.run();
+      });
+    },
+
+    searchContacts({ q, limit }) {
+      const lim = Math.max(1, Math.min(200, limit ?? 20));
+      const term = q ? `%${q.replace(/[\\%_]/g, (ch) => '\\' + ch)}%` : null;
+      return stmt.searchContacts
+        .all(term, term, term, term, term, term, lim)
+        .map(contactView);
+    },
+
+    // jid → { name, source } for every jid with a known name; LIDs resolve
+    // through lid_map first.
+    contactNames(jids) {
+      const out = {};
+      for (const jid of new Set(jids.filter(Boolean))) {
+        const row = stmt.getContact.get(canonicalJid(jid)) ?? stmt.getContact.get(jid);
+        const shown = displayName(row);
+        if (shown) out[jid] = shown;
+      }
+      return out;
+    },
+
+    contactCounts() {
+      return { ...stmt.contactCounts.get() };
     },
   };
 }

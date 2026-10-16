@@ -25,6 +25,9 @@ import {
   ReadableChatsBody,
   InboundQuery,
   InboundResponse,
+  ContactsQuery,
+  ContactsResponse,
+  ContactsResyncResponse,
 } from '../src/schemas/admin.js';
 import { DmResumeResponse } from '../src/schemas/project.js';
 
@@ -39,7 +42,7 @@ function zodErrorHook(result, c) {
   }
 }
 
-export function createAdminApp({ db, getSock, isPaired, groupsCache, adminToken, logger, dmSender }) {
+export function createAdminApp({ db, getSock, isPaired, groupsCache, adminToken, logger, dmSender, resyncContacts }) {
   const app = new OpenAPIHono({ defaultHook: zodErrorHook });
 
   const requireAdmin = async (c, next) => {
@@ -404,7 +407,66 @@ export function createAdminApp({ db, getSock, isPaired, groupsCache, adminToken,
       // Rows are in send-time order (history sync inserts out of order), so the
       // polling cursor is the highest id in the batch, not the first row's.
       const nextCursor = rows.length > 0 ? Math.max(...rows.map((r) => r.id)) : null;
-      return c.json({ messages: rows, nextCursor });
+      const names = db.contactNames(rows.flatMap((r) => [r.sender_jid, r.chat_jid]));
+      const messages = rows.map((r) => ({
+        ...r,
+        sender_name: names[r.sender_jid]?.name ?? null,
+        chat_name: r.chat_jid.endsWith('@g.us') ? null : names[r.chat_jid]?.name ?? null,
+      }));
+      return c.json({ messages, nextCursor });
+    }
+  );
+
+  // Names stay behind the admin token: the reader tier and project tokens
+  // never see them.
+  app.openapi(
+    createRoute({
+      method: 'get',
+      path: '/api/contacts',
+      tags: ['contacts'],
+      summary: 'Search contact names (WhatsApp address book, Google, pushName)',
+      description:
+        'Each contact carries every known name; `name` is the one shown, picked WhatsApp address book first, then Google, then the pushName the person set themselves. Matching is a case-insensitive substring over all names, Google aliases and the JID.',
+      security: [{ bearerAuth: [] }],
+      request: { query: ContactsQuery },
+      responses: {
+        200: { content: { 'application/json': { schema: ContactsResponse } }, description: 'OK' },
+      },
+    }),
+    (c) => {
+      const { q, limit } = c.req.valid('query');
+      return c.json({
+        contacts: db.searchContacts({ q: q || null, limit: limit ? Number(limit) : 20 }),
+        counts: db.contactCounts(),
+      });
+    }
+  );
+
+  app.openapi(
+    createRoute({
+      method: 'post',
+      path: '/api/contacts/resync',
+      tags: ['contacts'],
+      summary: 'Re-pull address-book names from WhatsApp',
+      description:
+        'Drops the stored version of the critical_unblock_low app-state collection and resyncs it from a full snapshot, which replays every contact name the phone holds. No re-pairing.',
+      security: [{ bearerAuth: [] }],
+      responses: {
+        200: { content: { 'application/json': { schema: ContactsResyncResponse } }, description: 'Resynced' },
+        502: { content: { 'application/json': { schema: ErrorEnvelope } }, description: 'Resync failed' },
+        503: { content: { 'application/json': { schema: ErrorEnvelope } }, description: 'Not paired' },
+      },
+    }),
+    async (c) => {
+      if (!isPaired()) return c.json({ error: 'not paired' }, 503);
+      const before = db.contactCounts();
+      try {
+        await resyncContacts();
+      } catch (err) {
+        logger.error({ err }, 'contacts resync failed');
+        return c.json({ error: 'resync failed', detail: String(err?.message ?? err) }, 502);
+      }
+      return c.json({ ok: true, before, after: db.contactCounts() });
     }
   );
 

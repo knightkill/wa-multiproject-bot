@@ -173,6 +173,12 @@ export const InboundMessage = z
     quoted_wa_id: z.string().nullable(),
     media_mime: z.string().nullable(),
     media_saved: z.number().int(),
+    sender_name: z.string().nullable().optional().openapi({
+      description: 'Contact name for sender_jid (admin API only; WhatsApp address book, then Google, then pushName).',
+    }),
+    chat_name: z.string().nullable().optional().openapi({
+      description: 'Contact name for a 1:1 chat_jid (admin API only).',
+    }),
   })
   .openapi('InboundMessage');
 
@@ -198,3 +204,72 @@ export const ReaderInboundQuery = InboundQuery.extend({
       description: 'Only messages sent at or after this epoch-ms time.',
     }),
 });
+
+export const ContactsQuery = z.object({
+  q: z
+    .string()
+    .trim()
+    .max(80)
+    .optional()
+    .openapi({ param: { name: 'q', in: 'query' }, example: 'joshil', description: 'Substring of any name, alias or the number.' }),
+  limit: z
+    .string()
+    .regex(/^\d+$/)
+    .optional()
+    .openapi({ param: { name: 'limit', in: 'query' }, example: '20' }),
+});
+
+export const Contact = z
+  .object({
+    jid: z.string(),
+    lids: z.array(z.string()),
+    name: z.string().nullable(),
+    source: z.enum(['whatsapp', 'google', 'pushname']).nullable(),
+    whatsappName: z.string().nullable(),
+    googleName: z.string().nullable(),
+    googleAliases: z.array(z.string()),
+    pushName: z.string().nullable(),
+  })
+  .openapi('Contact');
+
+export const ContactCounts = z
+  .object({
+    total: z.number().int(),
+    whatsapp: z.number().int(),
+    google: z.number().int(),
+    pushname: z.number().int(),
+    lids: z.number().int(),
+  })
+  .openapi('ContactCounts');
+
+export const ContactsResponse = z
+  .object({ contacts: z.array(Contact), counts: ContactCounts })
+  .openapi('ContactList');
+
+export const ContactsResyncResponse = z
+  .object({ ok: z.literal(true), before: ContactCounts, after: ContactCounts })
+  .openapi('ContactsResync');
+
+export const GoogleContactsBody = z
+  .object({
+    contacts: z
+      .array(
+        z.object({
+          name: z.string().max(200),
+          phones: z.array(z.string().max(40)).max(20),
+          updatedAt: z.string().max(40).optional(),
+        })
+      )
+      .max(20000),
+  })
+  .openapi('GoogleContactsBody');
+
+export const GoogleContactsResponse = z
+  .object({
+    ok: z.literal(true),
+    received: z.number().int(),
+    numbers: z.number().int(),
+    skippedPhones: z.number().int(),
+    counts: ContactCounts,
+  })
+  .openapi('GoogleContactsPushed');
