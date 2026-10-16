@@ -18,6 +18,8 @@ import { createDmSender } from './src/dmQueue.js';
 import { normalizeInbound } from './src/inbound.js';
 import { registerAccountRoutes } from './src/account-routes.js';
 import { readerConfig } from './routes/reader.js';
+import { contactsPushToken } from './routes/contacts-push.js';
+import { captureContacts, captureLidMappings, lidPairsFromKey } from './src/contacts.js';
 
 const logger = pino({ level: process.env.LOG_LEVEL ?? 'info' });
 
@@ -67,6 +69,15 @@ const reader = readerConfig({
   readerToken: process.env.READER_TOKEN,
   readerChats: process.env.READER_CHATS,
   adminToken: ADMIN_TOKEN,
+  logger,
+});
+
+// Google Contacts are pushed in with their own token; the same snapshot
+// endpoint exists per account (/contacts/google, /a/<name>/contacts/google).
+const pushToken = contactsPushToken({
+  token: process.env.CONTACTS_PUSH_TOKEN,
+  adminToken: ADMIN_TOKEN,
+  readerToken: process.env.READER_TOKEN,
   logger,
 });
 
@@ -174,9 +185,17 @@ function createAccount({ name, authDir, dbPath, prefix }) {
       }
     });
 
+    // Contact names from the phone's address book arrive as app-state
+    // contactAction mutations (contacts.upsert); pushNames arrive on every
+    // message (contacts.update). Both are stored, chats or not.
+    sock.ev.on('contacts.upsert', (contacts) => captureContacts(db, contacts, log));
+    sock.ev.on('contacts.update', (updates) => captureContacts(db, updates, log));
+    sock.ev.on('lid-mapping.update', (mapping) => captureLidMappings(db, mapping, log));
+
     sock.ev.on('messages.upsert', ({ messages, type }) => {
       if (type !== 'notify' || !messages?.length) return;
       for (const message of messages) {
+        captureLidMappings(db, lidPairsFromKey(message?.key), log);
         try {
           const chatJid = message?.key?.remoteJid;
           if (!chatJid || !db.isReadableChat(chatJid)) continue;
@@ -197,8 +216,10 @@ function createAccount({ name, authDir, dbPath, prefix }) {
     // messaging-history.set chunks. Same readable-chats gate and
     // normalizer as live capture; INSERT OR IGNORE on (wa_id, chat_jid)
     // makes this safe to overlap with messages.upsert and across chunks.
-    sock.ev.on('messaging-history.set', ({ messages, syncType, isLatest, progress }) => {
+    sock.ev.on('messaging-history.set', ({ messages, contacts, lidPnMappings, syncType, isLatest, progress }) => {
       log.info({ syncType, isLatest, progress, count: messages?.length ?? 0 }, 'history sync chunk received');
+      captureLidMappings(db, lidPnMappings, log);
+      captureContacts(db, contacts, log);
       if (!messages?.length) return;
       let stored = 0;
       for (const message of messages) {
@@ -214,6 +235,25 @@ function createAccount({ name, authDir, dbPath, prefix }) {
       }
       log.info({ stored }, 'history sync chunk processed');
     });
+  }
+
+  // Address-book names live in the critical_unblock_low app-state collection.
+  // Dropping its stored version makes Baileys fetch a full snapshot, whose
+  // mutations replay as contacts.upsert for every saved contact.
+  async function resyncContacts() {
+    if (!sock) throw new Error('not connected');
+    await sock.authState.keys.set({ 'app-state-sync-version': { critical_unblock_low: null } });
+    await sock.resyncAppState(['critical_unblock_low'], true);
+    // resyncAppState is a buffered function: its contacts.upsert events are
+    // flushed after it resolves, so wait for the counts to settle (≤10 s).
+    let last = JSON.stringify(db.contactCounts());
+    for (let i = 0; i < 20; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      const now = JSON.stringify(db.contactCounts());
+      if (now === last && i > 0) break;
+      last = now;
+    }
+    log.info({ counts: db.contactCounts() }, 'contacts resync finished');
   }
 
   start().catch((e) => {
@@ -259,6 +299,8 @@ function createAccount({ name, authDir, dbPath, prefix }) {
     dmSender,
     dmAllowlistEnabled,
     saveMedia,
+    resyncContacts,
+    contactsPushToken: pushToken,
     log,
   });
 

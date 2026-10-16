@@ -62,7 +62,7 @@ _Avoid_: history, audit log.
 
 **Participant**:
 A phone-number JID (`<number>@s.whatsapp.net`) identifying a person who has been, or is being, added to a Group. Distinct from a Group JID (which ends `@g.us`). A `create_group` / participants-add call accepts raw phone numbers and normalizes them to Participant JIDs; WhatsApp may refuse an add (privacy settings, a block, a recent leave) — that is a per-Participant status, not a Group-level failure.
-_Avoid_: member, user, contact, recipient.
+_Avoid_: member, user, recipient. (A **Contact** is a known name, not a group member.)
 
 **Invite link**:
 The opt-in path into a Group: `https://chat.whatsapp.com/<code>`, where `<code>` is the current invite code returned by WhatsApp. Preferred over a force-add, because a Participant whose privacy settings block being added (status 403) can still join by following the link. Revoking the invite rotates the code and invalidates the old link.
@@ -88,9 +88,17 @@ _Avoid_: child group, nested group, sub-community.
 A 1:1 message sent to a single Participant via `sendMessage` (`POST /v1/dm`), as opposed to a Post to a Group. The opt-in, low-volume exception to the default distribution path — the recommended channel remains an invite-link Group Post. DM is high ban-risk and is the reason every WA-3 safeguard exists. A DM carries only a recipient JID and text; it is not a Post and never writes to the Message Log.
 _Avoid_: pm, private message, 1-1, dm blast.
 
+**Contact**:
+A person the bot has a name for: one row keyed by their phone-number JID (or their LID until WhatsApp reveals the mapping), holding up to three names side by side — the operator's **WhatsApp address-book name**, their **Google Contacts name** (plus aliases from duplicate entries), and the **pushName** the person set themselves. The shown name is picked in that order at read time; no source overwrites another. Admin-only, and never a send gate: a Contact is not a **Participant** and not a **DM allowlist** entry.
+_Avoid_: address book, phonebook, user, member.
+
+**LID**:
+WhatsApp's privacy identifier for a person (`<digits>@lid`), used in place of the phone number in many chats under Baileys 7. Maps to exactly one phone-number JID once WhatsApp sends the pair; the bot records pairs in `lid_map`.
+_Avoid_: lid id, hidden id.
+
 **DM allowlist**:
 The opt-in set of user JIDs the bot is permitted to DM at all (`dm_allowed` table). The `403` gate on `POST /v1/dm`: a recipient not in the DM allowlist can never be DMed. Operator-managed via `/admin/api/dm-allowlist`. Distinct from the group **Allowlist** — that gates which Group JIDs may receive Posts; this gates which Participant JIDs may receive DMs. The two never share rows.
-_Avoid_: dm whitelist, contacts, recipients list, permitted numbers.
+_Avoid_: dm whitelist, recipients list, permitted numbers. (Not **Contacts** — knowing a name never permits a DM.)
 
 **Send throttle**:
 The server-enforced pace on DM delivery: a per-message jitter delay (`DM_JITTER_MIN_MS`/`DM_JITTER_MAX_MS`) plus a per-minute cap (`DM_CAP_PER_MIN`) and a per-day cap (`DM_CAP_PER_DAY`). Sourced only from the process environment; **never settable or overridable from the request body or query**. A caller can express intent but cannot speed up or raise limits.
@@ -123,6 +131,8 @@ _Avoid_: outbox, buffer, spool, job list.
 - Every accepted **DM** becomes a row in the **DM queue**, drained one at a time under the **Send throttle**; the throttle's jitter and caps come only from the environment, so no **Project** can DM faster than the operator-configured pace, regardless of how the request is shaped
 - A **DM** never writes to the **Message Log** — that table records Posts; DM delivery state lives in the DM queue (`pending`/`sent`/`failed`/`skipped`) and is read back via `GET /v1/dm/status`
 - A WhatsApp restriction on a **DM** triggers **Restriction auto-pause**: the **DM queue** halts and the in-flight row stays `pending`, so on operator un-pause it resumes without double-sending (the `idempotency_key` enforces this)
+- A **Contact**'s shown name is WhatsApp address-book name ⟶ Google name ⟶ pushName; each source writes only its own column, so a Google snapshot never changes a WhatsApp name
+- **Contacts** are visible only under the **Admin Token**; they are never consulted by the **DM allowlist** or any send path
 - The default distribution path remains an invite-link Group **Post**; **DM** is the opt-in, low-volume exception — high ban-risk, and the reason the **Send throttle**, **Restriction auto-pause**, and **DM allowlist** all exist
 
 ## Example dialogue
