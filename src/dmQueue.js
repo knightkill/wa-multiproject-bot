@@ -74,7 +74,10 @@ export function createDmSender({ db, getSock, isPaired, logger, config = {} }) {
   // Immediate single-DM path (POST /v1/dm). Throws an Object with a `code` the
   // route maps to an HTTP status. Still goes through the queue + caps so the
   // synchronous path can never bypass the safeguards.
-  async function sendNow(toJid, body) {
+  // `media` is optional: { buffer, mimetype, filename }. With media, `body` is
+  // the caption, and the queue row records a "[image]"/"[document]" marker
+  // plus the caption — the file itself is never written to the database.
+  async function sendNow(toJid, body, media) {
     return withLock(async () => {
       const state = db.getDmState();
       if (state.paused) {
@@ -92,12 +95,26 @@ export function createDmSender({ db, getSock, isPaired, logger, config = {} }) {
       // we can locate exactly the row we just inserted regardless of any backlog.
       const batchId = makeBatchId();
       const idempotencyKey = `${batchId}:${toJid}`;
-      db.enqueueDm({ batchId, toJid, body, idempotencyKey });
+      const kind = media ? (media.mimetype.startsWith('image/') ? 'image' : 'document') : null;
+      const logBody = kind ? `[${kind}] ${body ?? ''}`.trim() : body;
+      db.enqueueDm({ batchId, toJid, body: logBody, idempotencyKey });
       const rows = db.listDmQueue({ batchId, status: 'pending', limit: 1 });
       const row = rows[0];
 
+      let content = { text: body };
+      if (kind === 'image') {
+        content = { image: media.buffer, mimetype: media.mimetype, ...(body ? { caption: body } : {}) };
+      } else if (kind === 'document') {
+        content = {
+          document: media.buffer,
+          mimetype: media.mimetype,
+          fileName: media.filename ?? 'document.pdf',
+          ...(body ? { caption: body } : {}),
+        };
+      }
+
       try {
-        await getSock().sendMessage(toJid, { text: body });
+        await getSock().sendMessage(toJid, content);
         db.markDmSent(row.id);
         return { status: 'sent' };
       } catch (err) {
