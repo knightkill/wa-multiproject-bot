@@ -342,7 +342,7 @@ const DmText = z
 export const DM_MEDIA_MAX_BYTES = 5 * 1024 * 1024;
 export const DM_MEDIA_MIMETYPES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
 
-const DmMedia = z
+export const DmMedia = z
   .object({
     data: z
       .string()
@@ -356,6 +356,23 @@ const DmMedia = z
     }),
   })
   .openapi('DmMedia');
+
+// One file to one group, with no text card in front of it (unlike /v1/post,
+// which always leads with a bold title). Same inline media as a DM.
+export const PostFileBody = z
+  .object({
+    groupJid: GroupJid,
+    media: DmMedia,
+    caption: z.string().min(1).max(4096).optional(),
+  })
+  .openapi('PostFileBody');
+
+export const PostFileResponse = z
+  .object({
+    ok: z.literal(true),
+    project: z.string().openapi({ example: 'receipts' }),
+  })
+  .openapi('PostFileResponse');
 
 export const DmBody = z
   .object({
