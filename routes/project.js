@@ -31,6 +31,7 @@ import {
   CommunitySubgroupsResponse,
   CommunityMetadataResponse,
   DmBody,
+  DM_MEDIA_MAX_BYTES,
   DmBatchBody,
   DmResultResponse,
   DmBatchResponse,
@@ -1238,7 +1239,7 @@ export function createProjectApp({ db, getSock, isPaired, groupsCache, logger, d
     tags: ['dm'],
     summary: 'Send a 1:1 direct message (high ban-risk)',
     description:
-      'Sends a single text DM to one recipient. HIGH BAN-RISK: direct messaging is throttled server-side (per-minute + per-day caps and randomized jitter) and the rate cannot be raised by the caller. The recipient must be on the DM allowlist. Prefer an invite-link group Post (POST /v1/post) for distribution.',
+      'Sends a single DM to one recipient: text, or an image/PDF (base64, max 5 MB) with an optional caption. HIGH BAN-RISK: direct messaging is throttled server-side (per-minute + per-day caps and randomized jitter) and the rate cannot be raised by the caller. The recipient must be on the DM allowlist. Prefer an invite-link group Post (POST /v1/post) for distribution.',
     security: [{ bearerAuth: [] }],
     request: { body: { content: { 'application/json': { schema: DmBody } }, required: true } },
     responses: {
@@ -1252,7 +1253,7 @@ export function createProjectApp({ db, getSock, isPaired, groupsCache, logger, d
   app.openapi(dmRoute, async (c) => {
     if (!isPaired()) return c.json({ error: 'not paired' }, 503);
     const project = c.get('project');
-    const { toJid, text } = c.req.valid('json');
+    const { toJid, text, media: mediaInput } = c.req.valid('json');
 
     let jid;
     try {
@@ -1265,9 +1266,21 @@ export function createProjectApp({ db, getSock, isPaired, groupsCache, logger, d
       return c.json({ error: 'recipient not permitted (not in DM allowlist)' }, 403);
     }
 
+    let media;
+    if (mediaInput) {
+      const buffer = Buffer.from(mediaInput.data, 'base64');
+      if (buffer.length === 0) {
+        return c.json({ error: 'invalid media', detail: 'empty or not base64' }, 400);
+      }
+      if (buffer.length > DM_MEDIA_MAX_BYTES) {
+        return c.json({ error: 'invalid media', detail: `over ${DM_MEDIA_MAX_BYTES} bytes` }, 400);
+      }
+      media = { buffer, mimetype: mediaInput.mimetype, filename: mediaInput.filename };
+    }
+
     try {
-      const res = await dmSender.sendNow(jid, text);
-      logger.info({ project: project.name, jid }, 'dm sent');
+      const res = await dmSender.sendNow(jid, text, media);
+      logger.info({ project: project.name, jid, media: media?.mimetype ?? null }, 'dm sent');
       return c.json({ ok: true, toJid: jid, status: res.status });
     } catch (err) {
       switch (err?.code) {

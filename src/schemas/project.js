@@ -336,10 +336,36 @@ const DmText = z
   .max(4096)
   .openapi({ example: 'Hi — thanks for opting in.' });
 
+// Media travels inline as base64 rather than as a URL: the files this is for
+// (receipts, bills) should not have to be hosted publicly first. Single-DM
+// only — batch DMs stay text, so media can't be bulk-sent.
+export const DM_MEDIA_MAX_BYTES = 5 * 1024 * 1024;
+export const DM_MEDIA_MIMETYPES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+
+const DmMedia = z
+  .object({
+    data: z
+      .string()
+      .min(1)
+      // base64 inflates by 4/3; the decoded size is re-checked in the route.
+      .max(Math.ceil((DM_MEDIA_MAX_BYTES * 4) / 3) + 4)
+      .openapi({ description: 'File contents, base64-encoded. Max 5 MB decoded.' }),
+    mimetype: z.enum(DM_MEDIA_MIMETYPES),
+    filename: z.string().min(1).max(200).optional().openapi({
+      description: 'Shown as the document name for PDFs; ignored for images.',
+    }),
+  })
+  .openapi('DmMedia');
+
 export const DmBody = z
   .object({
     toJid: RecipientId,
-    text: DmText,
+    text: DmText.optional().openapi({ description: 'Message body, or the caption when media is sent.' }),
+    media: DmMedia.optional(),
+  })
+  .refine((b) => b.text !== undefined || b.media !== undefined, {
+    message: 'text or media is required',
+    path: ['text'],
   })
   .openapi('DmBody');
 
