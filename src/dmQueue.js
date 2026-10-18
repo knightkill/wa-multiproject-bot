@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { mediaContent, mediaLogLine } from './inline-media.js';
 
 // 1:1 DM sender with MANDATORY server-side safeguards.
 //
@@ -95,23 +96,12 @@ export function createDmSender({ db, getSock, isPaired, logger, config = {} }) {
       // we can locate exactly the row we just inserted regardless of any backlog.
       const batchId = makeBatchId();
       const idempotencyKey = `${batchId}:${toJid}`;
-      const kind = media ? (media.mimetype.startsWith('image/') ? 'image' : 'document') : null;
-      const logBody = kind ? `[${kind}] ${body ?? ''}`.trim() : body;
+      const logBody = media ? mediaLogLine(media, body) : body;
       db.enqueueDm({ batchId, toJid, body: logBody, idempotencyKey });
       const rows = db.listDmQueue({ batchId, status: 'pending', limit: 1 });
       const row = rows[0];
 
-      let content = { text: body };
-      if (kind === 'image') {
-        content = { image: media.buffer, mimetype: media.mimetype, ...(body ? { caption: body } : {}) };
-      } else if (kind === 'document') {
-        content = {
-          document: media.buffer,
-          mimetype: media.mimetype,
-          fileName: media.filename ?? 'document.pdf',
-          ...(body ? { caption: body } : {}),
-        };
-      }
+      const content = media ? mediaContent(media, body) : { text: body };
 
       try {
         await getSock().sendMessage(toJid, content);

@@ -30,8 +30,9 @@ import {
   CommunityListResponse,
   CommunitySubgroupsResponse,
   CommunityMetadataResponse,
+  PostFileBody,
+  PostFileResponse,
   DmBody,
-  DM_MEDIA_MAX_BYTES,
   DmBatchBody,
   DmResultResponse,
   DmBatchResponse,
@@ -44,6 +45,7 @@ import { transcodeVideo, TranscodeTimeout, TranscodeError } from '../src/transco
 import { safeFetch, UnsafeUrlError } from '../src/safe-url.js';
 import { rateLimit } from '../src/rate-limit.js';
 import { toUserJid } from '../src/jid.js';
+import { decodeInlineMedia, InvalidMediaError, mediaContent, mediaLogLine } from '../src/inline-media.js';
 
 // WhatsApp silently drops inline video deliveries above ~16 MB for
 // non-business accounts. We HEAD each video item; oversized ones go
@@ -358,6 +360,60 @@ export function createProjectApp({ db, getSock, isPaired, groupsCache, logger, d
     } finally {
       clearTimeout(budgetTimer);
     }
+  });
+
+  const postFileRoute = createRoute({
+    method: 'post',
+    path: '/v1/post/file',
+    tags: ['messages'],
+    summary: 'Post one image or PDF to a WhatsApp group',
+    description:
+      "Sends a single image (JPEG/PNG/WebP) or PDF, base64-encoded inline (max 5 MB), with an optional caption and no text card in front of it. Same group check as POST /v1/post: the group must be in this project's access and in the global allowlist.",
+    security: [{ bearerAuth: [] }],
+    request: { body: { content: { 'application/json': { schema: PostFileBody } }, required: true } },
+    responses: {
+      200: { content: { 'application/json': { schema: PostFileResponse } }, description: 'Sent' },
+      400: { content: { 'application/json': { schema: ErrorEnvelope } }, description: 'Invalid media' },
+      401: { content: { 'application/json': { schema: ErrorEnvelope } }, description: 'Missing or invalid project token' },
+      403: { content: { 'application/json': { schema: ErrorEnvelope } }, description: 'Target group not permitted for this project' },
+      502: { content: { 'application/json': { schema: ErrorEnvelope } }, description: 'Upstream WhatsApp send failure' },
+      503: { content: { 'application/json': { schema: ErrorEnvelope } }, description: 'Bot is not paired with WhatsApp' },
+    },
+  });
+
+  app.use(postFileRoute.getRoutingPath(), requireProject);
+
+  app.openapi(postFileRoute, async (c) => {
+    if (!isPaired()) return c.json({ error: 'not paired' }, 503);
+    const project = c.get('project');
+    const { groupJid, media: mediaInput, caption } = c.req.valid('json');
+
+    const projectGroups = new Set(project.groupJids);
+    const allowed = new Set(db.listAllowedGroups());
+    if (!projectGroups.has(groupJid) || !allowed.has(groupJid)) {
+      return c.json({ error: 'groupJid not permitted for this project' }, 403);
+    }
+
+    let media;
+    try {
+      media = decodeInlineMedia(mediaInput);
+    } catch (err) {
+      if (err instanceof InvalidMediaError) return c.json({ error: 'invalid media', detail: err.message }, 400);
+      throw err;
+    }
+
+    const title = mediaLogLine(media, caption);
+    try {
+      await getSock().sendMessage(groupJid, mediaContent(media, caption));
+    } catch (err) {
+      const detail = String(err?.message ?? err);
+      db.logMessage({ projectName: project.name, groupJid, title, status: 'failed', error: detail, mediaCount: 1 });
+      logger.error({ err, project: project.name, jid: groupJid }, 'file post failed');
+      return c.json({ error: 'send failed', detail }, 502);
+    }
+    db.logMessage({ projectName: project.name, groupJid, title, status: 'sent', error: null, mediaCount: 1 });
+    logger.info({ project: project.name, jid: groupJid, media: media.mimetype }, 'file posted');
+    return c.json({ ok: true, project: project.name });
   });
 
   const groupsRoute = createRoute({
@@ -1268,14 +1324,12 @@ export function createProjectApp({ db, getSock, isPaired, groupsCache, logger, d
 
     let media;
     if (mediaInput) {
-      const buffer = Buffer.from(mediaInput.data, 'base64');
-      if (buffer.length === 0) {
-        return c.json({ error: 'invalid media', detail: 'empty or not base64' }, 400);
+      try {
+        media = decodeInlineMedia(mediaInput);
+      } catch (err) {
+        if (err instanceof InvalidMediaError) return c.json({ error: 'invalid media', detail: err.message }, 400);
+        throw err;
       }
-      if (buffer.length > DM_MEDIA_MAX_BYTES) {
-        return c.json({ error: 'invalid media', detail: `over ${DM_MEDIA_MAX_BYTES} bytes` }, 400);
-      }
-      media = { buffer, mimetype: mediaInput.mimetype, filename: mediaInput.filename };
     }
 
     try {
