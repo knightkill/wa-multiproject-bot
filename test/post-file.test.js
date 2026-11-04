@@ -74,6 +74,35 @@ describe('POST /v1/post/file', () => {
     assert.ok(Buffer.isBuffer(sent[0].content.document));
   });
 
+  test('zip posts as a document, and may exceed the 5 MB image cap', async () => {
+    const { sent, post } = build();
+    const zip = Buffer.alloc(6 * 1024 * 1024, 1);
+    zip.write('PK\x03\x04', 0, 'latin1');
+    const res = await post({
+      groupJid: GROUP,
+      media: { data: zip.toString('base64'), mimetype: 'application/zip', filename: 'menu-pack.zip' },
+      caption: 'print pack',
+    });
+    assert.equal(res.status, 200);
+    assert.equal(sent[0].content.fileName, 'menu-pack.zip');
+    assert.equal(sent[0].content.mimetype, 'application/zip');
+    assert.equal(sent[0].content.document.length, zip.length);
+  });
+
+  test('zip without a filename gets files.zip', async () => {
+    const { sent, post } = build();
+    const res = await post({ groupJid: GROUP, media: { data: Buffer.from('PK').toString('base64'), mimetype: 'application/zip' } });
+    assert.equal(res.status, 200);
+    assert.equal(sent[0].content.fileName, 'files.zip');
+  });
+
+  test('document over 25 MB is refused', async () => {
+    const { sent, post } = build();
+    const big = Buffer.alloc(25 * 1024 * 1024 + 1).toString('base64');
+    assert.equal((await post({ groupJid: GROUP, media: { data: big, mimetype: 'application/zip' } })).status, 400);
+    assert.equal(sent.length, 0);
+  });
+
   test('group outside the project is refused', async () => {
     const { sent, post } = build();
     const res = await post({ groupJid: OTHER, media: png });

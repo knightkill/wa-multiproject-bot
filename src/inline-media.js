@@ -1,4 +1,4 @@
-import { DM_MEDIA_MAX_BYTES } from './schemas/project.js';
+import { DM_MEDIA_MAX_BYTES, DOCUMENT_MAX_BYTES } from './schemas/project.js';
 
 // Inline (base64) media shared by POST /v1/dm and POST /v1/post/file. The
 // schema has already restricted the mimetype; this decodes and size-checks,
@@ -9,13 +9,16 @@ export class InvalidMediaError extends Error {}
 export function decodeInlineMedia(input) {
   const buffer = Buffer.from(input.data, 'base64');
   if (buffer.length === 0) throw new InvalidMediaError('empty or not base64');
-  if (buffer.length > DM_MEDIA_MAX_BYTES) throw new InvalidMediaError(`over ${DM_MEDIA_MAX_BYTES} bytes`);
+  const max = mediaKind(input) === 'image' ? DM_MEDIA_MAX_BYTES : DOCUMENT_MAX_BYTES;
+  if (buffer.length > max) throw new InvalidMediaError(`over ${max} bytes`);
   return { buffer, mimetype: input.mimetype, filename: input.filename };
 }
 
 export function mediaKind(media) {
   return media.mimetype.startsWith('image/') ? 'image' : 'document';
 }
+
+const DEFAULT_FILENAME = { 'application/pdf': 'document.pdf', 'application/zip': 'files.zip' };
 
 // What gets logged in place of the file: a kind marker plus the caption.
 export function mediaLogLine(media, caption) {
@@ -30,7 +33,7 @@ export function mediaContent(media, caption) {
   return {
     document: media.buffer,
     mimetype: media.mimetype,
-    fileName: media.filename ?? 'document.pdf',
+    fileName: media.filename ?? DEFAULT_FILENAME[media.mimetype] ?? 'document',
     ...withCaption,
   };
 }
