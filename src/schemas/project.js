@@ -339,8 +339,11 @@ const DmText = z
 // Media travels inline as base64 rather than as a URL: the files this is for
 // (receipts, bills) should not have to be hosted publicly first. Single-DM
 // only — batch DMs stay text, so media can't be bulk-sent.
+// Images stay at 5 MB; documents (PDF, zip) may be larger, since a print pack or
+// a bundle of scans is routinely over 5 MB. WhatsApp itself allows far more.
 export const DM_MEDIA_MAX_BYTES = 5 * 1024 * 1024;
-export const DM_MEDIA_MIMETYPES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+export const DOCUMENT_MAX_BYTES = 25 * 1024 * 1024;
+export const DM_MEDIA_MIMETYPES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf', 'application/zip'];
 
 export const DmMedia = z
   .object({
@@ -348,11 +351,11 @@ export const DmMedia = z
       .string()
       .min(1)
       // base64 inflates by 4/3; the decoded size is re-checked in the route.
-      .max(Math.ceil((DM_MEDIA_MAX_BYTES * 4) / 3) + 4)
-      .openapi({ description: 'File contents, base64-encoded. Max 5 MB decoded.' }),
+      .max(Math.ceil((DOCUMENT_MAX_BYTES * 4) / 3) + 4)
+      .openapi({ description: 'File contents, base64-encoded. Max 5 MB decoded for images, 25 MB for documents (PDF, zip).' }),
     mimetype: z.enum(DM_MEDIA_MIMETYPES),
     filename: z.string().min(1).max(200).optional().openapi({
-      description: 'Shown as the document name for PDFs; ignored for images.',
+      description: 'Shown as the document name for PDFs and zips; ignored for images.',
     }),
   })
   .openapi('DmMedia');
